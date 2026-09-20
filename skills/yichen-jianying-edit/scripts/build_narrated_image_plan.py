@@ -19,7 +19,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from align_audio import line_boundary_times  # noqa: E402
+from align_audio import line_boundary_times, keyword_span  # noqa: E402
 
 FPS_DEFAULT = 30
 
@@ -43,6 +43,17 @@ HOUSE_STYLE = {
         'size': 8, 'y': -0.72, 'max_lines': 2,
     },
     'bgm_volume_ratio': 0.18,  # BGM volume = narration volume * this ratio, unless spec overrides
+    'callout_pop': {
+        # Bounce-in keyword callout (separate "关键词" text track, not the
+        # subtitle track): scale pops from small -> slight overshoot -> settle.
+        # Text keyframes only support x/y/scale/rotation (no opacity), so the
+        # callout can't fade - it appears via the scale pop and disappears by
+        # simply ending when its segment's duration_us is up.
+        'scale_from': 0.4, 'scale_overshoot': 1.18, 'scale_settle': 1.0,
+        'pop_duration_us': 300_000, 'default_hold_us': 1_200_000,
+        'size': 14, 'x': 0.0, 'y': 0.08,
+        'color': '#FFD24C', 'border_color': '#000000', 'border_width': 0.1,
+    },
 }
 
 
@@ -179,6 +190,8 @@ def build_plan(spec):
         block['_wav_path'] = wav_path
         block['_raw_total_us'] = raw_total_us
         block['_target_total_us'] = target_total_us
+        block['_whisper_path'] = whisper_path
+        block['_ref_text'] = ''.join(block_lines)
 
     # 2. Resolve special (real-photo) insertions by exact text match.
     specials = spec.get('special_images', [])
@@ -235,6 +248,7 @@ def build_plan(spec):
 
     cursor = 0
     for block in spec['blocks']:
+        block['_timeline_start_us'] = cursor
         audio_track['segments'].append({
             "source": block['_wav_path'], "start_us": cursor, "duration_us": block['_target_total_us'],
             "source_start_us": 0, "source_duration_us": block['_raw_total_us'],
@@ -244,6 +258,43 @@ def build_plan(spec):
     narration_volume = spec['blocks'][0].get('volume', 1.0) if spec['blocks'] else 1.0
 
     tracks = [video_track]
+
+    callout_cfg = spec.get('callouts', [])
+    callout_track = None
+    if callout_cfg:
+        callout_track = {"type": "text", "name": spec.get('callout_track_name', '关键词'), "segments": []}
+        pop = style.get('callout_pop', HOUSE_STYLE['callout_pop'])
+        for c in callout_cfg:
+            keyword = c['keyword']
+            occurrence = c.get('occurrence', 1)
+            block = None
+            span = None
+            for b in spec['blocks']:
+                try:
+                    span = keyword_span(b['_ref_text'], b['_whisper_path'], keyword, occurrence)
+                    block = b
+                    break
+                except ValueError:
+                    continue
+            require(block is not None, f"Callout keyword {keyword!r} (occurrence {occurrence}) "
+                    "was not found in any block's narration text")
+            raw_start_s, raw_end_s = span
+            speed = block['_raw_total_us'] / block['_target_total_us']
+            spoken_start_us = block['_timeline_start_us'] + round(raw_start_s * 1_000_000 / speed)
+            hold_us = c.get('duration_us', pop['default_hold_us'])
+            pop_us = min(pop['pop_duration_us'], hold_us)
+            callout_track['segments'].append({
+                "text": c.get('text', keyword),
+                "start_us": spoken_start_us, "duration_us": hold_us,
+                "size": c.get('size', pop['size']), "x": c.get('x', pop['x']), "y": c.get('y', pop['y']),
+                "color": c.get('color', pop['color']), "border_color": c.get('border_color', pop['border_color']),
+                "border_width": c.get('border_width', pop['border_width']),
+                "keyframes": {"scale": [
+                    {"at_us": 0, "value": pop['scale_from']},
+                    {"at_us": round(pop_us * 0.6), "value": pop['scale_overshoot']},
+                    {"at_us": pop_us, "value": pop['scale_settle']},
+                ]},
+            })
 
     bgm_cfg = spec.get('bgm')
     if bgm_cfg:
@@ -262,6 +313,8 @@ def build_plan(spec):
         tracks.append(bgm_track)
 
     tracks.append(audio_track)
+    if callout_track is not None:
+        tracks.append(callout_track)
     if text_track is not None:
         tracks.append(text_track)
 

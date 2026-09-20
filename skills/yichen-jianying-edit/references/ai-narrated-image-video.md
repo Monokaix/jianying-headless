@@ -32,6 +32,16 @@
   音量自动设成旁白音量的 `bgm_volume_ratio`(默认 0.18)倍，不用手动配比；
   BGM 素材比旁白短会报错，需要你自己准备够长的曲子或换一首，不会自动
   循环拼接。
+- **关键词弹出强调**(通过 spec.json 的 `"callouts"` 开启，默认不加，注意
+  这跟字幕文字放大是两回事——这是独立于字幕的一个"关键词"文字轨，在说到
+  某个词的**那一刻**单独弹出)：目前只做了"缩放弹跳"一种(从小弹到略微
+  过冲再回落到 1.0)，逐字打字机效果还没做。定位方式是用 Whisper 词级
+  时间戳在参考文本里搜这个词具体第几次出现、精确到那几个字被念出来的
+  起止时间(不是这个词所在整句话的开始时间)，所以哪怕关键词出现在句子
+  中间，弹出时机也是准的。`occurrence` 字段处理同一个词在文本里出现多次
+  的情况(默认取第 1 次)；同一个词只会精确定位那一次出现，不会重复触发。
+  文字关键帧只支持 x/y/scale/rotation，没有透明度，所以弹出效果做不出
+  淡入淡出，只能靠缩放变化，消失是片段时长到了直接结束。
 
 ## 这条链路做不到的事(边界)
 
@@ -126,7 +136,11 @@ python3 SKILL/scripts/build_narrated_image_plan.py --spec spec.json --out WORK/p
      "keyframes": {"scale": [1.35, 1.62], "x": [0.10, -0.14], "y": [0, 0]}}
   ],
   "subtitles": {"enabled": false},
-  "bgm": {"source": "本次授权的背景音乐.wav"}
+  "bgm": {"source": "本次授权的背景音乐.wav"},
+  "callouts": [
+    {"keyword": "红票", "occurrence": 1},
+    {"keyword": "利玛窦", "occurrence": 1, "duration_us": 1500000}
+  ]
 }
 ```
 
@@ -134,7 +148,9 @@ python3 SKILL/scripts/build_narrated_image_plan.py --spec spec.json --out WORK/p
 `whisper_json` 字段可省略,脚本会自动转写并缓存在 wav 同目录下,下次
 重跑直接复用缓存,不用重新转写。`match_line`/`match_lines` 必须和
 `block*.txt` 里的原文逐字一致,找不到会直接报错(不会静默瞎猜位置)。
-`subtitles`/`bgm` 都默认不开(这次康熙红票项目最终没要字幕),按需加。
+`subtitles`/`bgm`/`callouts` 都默认不开(这次康熙红票项目最终没要字幕),
+按需加。`callouts` 的 `keyword` 必须是参考文本里逐字出现过的子串,找不到
+会直接报错,不会静默跳过或猜测位置。
 
 ### 5. build / verify-build / publish
 
