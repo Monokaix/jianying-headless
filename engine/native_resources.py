@@ -14,7 +14,7 @@ import stat
 import headless_runtime as rt
 
 HERE = Path(__file__).resolve().parent
-CATALOG_SHA = '68021d765aa212436891056d06f205ef96365e1b687a3fdc28691f00a50105c5'
+CATALOG_SHA = '15a5a114fb19af206cc9a85d6ea9d3f3f24274e428adbf1a7f8f5dfe10ae03e8'
 SHAPES = ('circle', 'rectangle', 'line', 'mirror', 'star', 'heart')
 
 
@@ -100,10 +100,11 @@ def prepare(plan, folder, runtime):
     if not keys:
         return []
     data = catalog()
-    require(runtime['runtime_profile'] == data['runtime_profile'], 'Native resources need their captured runtime profile')
     records = []
     for key in keys:
         entry = definition(key)
+        allowed_profiles = entry.get('verified_runtime_profiles', [data['runtime_profile']])
+        require(runtime['runtime_profile'] in allowed_profiles, 'Native resources need their captured runtime profile')
         source = Path(entry['source'])
         require(source.is_absolute() and source.resolve(strict=True) == source,
                 'Native resource source must be the captured canonical directory')

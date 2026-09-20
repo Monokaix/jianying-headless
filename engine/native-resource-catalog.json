@@ -1092,7 +1092,8 @@
         "category_name": "热门"
       },
       "capture": "@home/Documents/Codex/2026-07-27/pyjianyingdraft/work/native-features-1142-20260914/capture-transition-dissolve-v1/timeline.json",
-      "capture_sha256": "5f844567508bd0b0c1740045e8144bdbe1fcb4336627cbf8cecb57a40c7b600a"
+      "capture_sha256": "5f844567508bd0b0c1740045e8144bdbe1fcb4336627cbf8cecb57a40c7b600a",
+      "verified_runtime_profiles": ["jy14-headless-macos-11.4.2", "jy14-headless-macos-11.4.0"]
     }
   }
 }

@@ -610,11 +610,14 @@ def copy_xattrs(source_attrs, destination, audit):
     write(audit / 'index-xattrs-staged.json', {k: v.hex() for k, v in copied.items()})
     # A bounded copy experiment on this Mac showed xattr -w returns success but the
     # OS assigns a different provenance value to the new inode. Never strip it,
-    # quarantine, or any other attribute to force an equality result.
+    # quarantine, or any other attribute to force an equality result. On macOS 26.6+
+    # the OS may also newly attach com.apple.macl to the destination inode.
     changed = sorted(k for k in set(source_attrs) | set(copied) if source_attrs.get(k) != copied.get(k))
-    require(not set(changed) - {'com.apple.provenance'}, 'Extended attributes could not be preserved before commit')
+    require(not set(changed) - {'com.apple.provenance', 'com.apple.macl'}, 'Extended attributes could not be preserved before commit')
     require(('com.apple.provenance' in source_attrs) == ('com.apple.provenance' in copied),
             'OS provenance attribute disappeared or unexpectedly appeared')
+    require('com.apple.macl' not in source_attrs or 'com.apple.macl' in copied,
+            'OS MAC access-list attribute unexpectedly disappeared')
     return copied, changed
 
 

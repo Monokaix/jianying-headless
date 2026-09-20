@@ -32,18 +32,18 @@ def project_root():
 PROJECT_ROOT = project_root()
 BACKEND = PROJECT_ROOT / 'engine'
 PINS = {
-    'jy14_headless.py': 'fd9ec517f35e810b3e38b340a5b344861c7fb53e56053b1c39ed9e25ddbf437f',
+    'jy14_headless.py': '3785389d40006428d4f4351a84507cd1a7ebe3db906b87adad72a3165292f30e',
     'native_motion.py': '5d743caaa38c921779166e5663d36f72a0c3fdb130a690ac3942a7adcf62d6c2',
     'native_effects.py': 'c46b2fc9221dd613f220564b752e532f8f3753dd5595aaffc24f41d5236e4e97',
-    'native_resources.py': '0b0f3048902f7ebb4629882f2739508a828784183c949786da4024ae24bee369',
+    'native_resources.py': 'dfcadb049fa313b8b026a6cee823b12d501e0124f6f8527469995c4459a2e39c',
     'native_visual_effects.py': 'f8a7a2d899383a5932deabe1c7adf644c61e37016e788d361ccd6ef6c95ac30d',
-    'native-resource-catalog.json': '68021d765aa212436891056d06f205ef96365e1b687a3fdc28691f00a50105c5',
+    'native-resource-catalog.json': '15a5a114fb19af206cc9a85d6ea9d3f3f24274e428adbf1a7f8f5dfe10ae03e8',
     'native_compound.py': '7b0df5a74d75d8f5623b11de3f4307569f84a4c6127ec316ed6fd133fc8d0d79',
     'compound-blueprint.json': '9cba9435053280abf9072d5eaccb8586c841b11dac6854b32daf9cbdba76af8e',
     'native_edit.py': '647a63e4346ae5514b7071a9de37f237bb1ff61abf2c399cb06683a6cd9bc777',
     'native_export.py': 'dccdfaeefc44fd5419f9cd16a0f00518f7d64b5fca69f236e77bd70b998c6920',
     'native_export.cpp': '3d74947a8b05c8ca31b0dc3909e0a08be4818985646c00cc64d63fb0645cee25',
-    'headless_runtime.py': 'bff4c918721295a2d98c61f9ef10a9a386e3b3a79f4c8bdeaee8682b9fa748c1',
+    'headless_runtime.py': 'c7d1f923c10485c4477305b393f94cc0dd7011a50b51668fdcbd9e7590218a1b',
     'blueprint.json': '91f7eddad5bff9af23eb88b53713c180e3e3d4054edd469140cfa9aa56bc1dc9',
 }
 

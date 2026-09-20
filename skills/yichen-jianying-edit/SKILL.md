@@ -28,6 +28,9 @@ description: 在装有匹配版本剪映的 Apple Silicon Mac 上，无界面生
 - 明确要求成片：读 [原生导出](references/export-macos.md)，只导出已验证的冻结快照。
 - 口播语义剪辑：读 [语义与音频质检](references/editing-and-qc.md) 和
   [口播计划格式](references/plan-format.md)，由 `scripts/edit_plan.py` 统一编译时间映射。
+- AI 配图 + 朗读解说类视频（图片幻灯片按真实语音节奏切换、Ken Burns 运镜、
+  转场轮换）：读 [AI 配图解说视频模板](references/ai-narrated-image-video.md)，
+  由 `scripts/build_narrated_image_plan.py` 统一生成 plan。
 
 ## 执行与验收
 

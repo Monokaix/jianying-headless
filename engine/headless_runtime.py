@@ -27,8 +27,13 @@ PINS = {
     'jy14_codec_hardened_11_4': 'b6533eb5eb1eea58dfa74fb1d16d3bb580970fe881f587605d358af1745f971d',
 }
 PROFILES = {
-    '11.4.0': 'a1693070036a6678bb5db35f71d2105812ad24a2370e7e91c78712cc0d6455f3',
-    '11.4.2': '632c8ddd09ff4a54f876cd8142eb505055ee26d944199506b230949b7e106bd1',
+    '11.4.0': {'short_version': '11.4.0', 'build': '11.4.0',
+               'sha256': 'a1693070036a6678bb5db35f71d2105812ad24a2370e7e91c78712cc0d6455f3'},
+    '11.4.2': {'short_version': '11.4.2', 'build': '11.4.2',
+               'sha256': '632c8ddd09ff4a54f876cd8142eb505055ee26d944199506b230949b7e106bd1'},
+    # App Store build of 11.4.0 (build 481), confirmed via codesign on 2026-09-18; distinct profile from '11.4.0' since its CFBundleVersion differs.
+    '11.4.0-appstore-481': {'short_version': '11.4.0', 'build': '481',
+                             'sha256': 'aea79715de6097394c2f38153e11565f02a823678801cd1eafe90bcccb20c086'},
 }
 BUNDLE_ID = 'com.lemon.lvpro'
 TEAM = 'X2JNK7LY8J'
@@ -65,11 +70,14 @@ def doctor():
             raise ValueError('IO/codec component changed: ' + name)
     info = plistlib.loads((APP / 'Contents/Info.plist').read_bytes())
     version = info.get('CFBundleShortVersionString')
-    if version not in PROFILES or info.get('CFBundleVersion') != version or info.get('CFBundleIdentifier') != BUNDLE_ID:
+    build = info.get('CFBundleVersion')
+    profile = next((candidate for candidate in PROFILES.values()
+                     if candidate['short_version'] == version and candidate['build'] == build), None)
+    if profile is None or info.get('CFBundleIdentifier') != BUNDLE_ID:
         raise ValueError('Unsupported Jianying version/build/identity; stop native writes')
     library = APP / 'Contents/Frameworks/libvideoeditor.dylib'
     fingerprint = digest(library)
-    if fingerprint != PROFILES[version]:
+    if fingerprint != profile['sha256']:
         raise ValueError('Editor library differs from its exact headless runtime profile')
     if not all(shutil.which(name) for name in ('ffmpeg', 'ffprobe')):
         raise ValueError('ffmpeg and ffprobe are required')
