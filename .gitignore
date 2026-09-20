@@ -46,5 +46,3 @@ draft_meta_info.json
 root_meta_info.json
 draft_content.json
 key_value.json
-# Personal Claude Code permission/hook config; not shared with the repo.
-/.claude/
