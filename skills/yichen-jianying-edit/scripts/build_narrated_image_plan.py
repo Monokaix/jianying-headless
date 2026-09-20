@@ -43,18 +43,73 @@ HOUSE_STYLE = {
         'size': 8, 'y': -0.72, 'max_lines': 2,
     },
     'bgm_volume_ratio': 0.18,  # BGM volume = narration volume * this ratio, unless spec overrides
+    'title_card': {
+        # Fixed opening title card: a small series tag above a larger episode
+        # title, both centered in the upper-middle of frame, held static
+        # (no pop) over the first scene(s). Gold-on-dark, matching a
+        # reference screenshot the user provided.
+        'duration_us': 3_500_000,
+        'series_size': 8, 'series_y': 0.30, 'series_color': '#D9B36C',
+        'series_border_color': '#000000', 'series_border_width': 0.06,
+        'title_size': 18, 'title_y': 0.16, 'title_color': '#F0CE80',
+        'title_border_color': '#000000', 'title_border_width': 0.08,
+    },
     'callout_pop': {
-        # Bounce-in keyword callout (separate "关键词" text track, not the
-        # subtitle track): scale pops from small -> slight overshoot -> settle.
-        # Text keyframes only support x/y/scale/rotation (no opacity), so the
-        # callout can't fade - it appears via the scale pop and disappears by
-        # simply ending when its segment's duration_us is up.
-        'scale_from': 0.4, 'scale_overshoot': 1.18, 'scale_settle': 1.0,
-        'pop_duration_us': 300_000, 'default_hold_us': 1_200_000,
+        # Keyword callout (separate "关键词" text track, not the subtitle
+        # track). Text keyframes only support x/y/scale/rotation (no
+        # opacity), so callouts can't fade - they appear via a motion pop and
+        # disappear by simply ending when their segment's duration_us is up.
+        # Multiple distinct styles cycle by default so repeated callouts
+        # don't all look the same; "style" can be forced per-entry in spec.
+        'default_hold_us': 1_200_000,
         'size': 14, 'x': 0.0, 'y': 0.08,
         'color': '#FFD24C', 'border_color': '#000000', 'border_width': 0.1,
+        'style_cycle': ['stamp', 'swipe_in', 'wobble_rotate', 'drop_in'],
     },
 }
+
+# One keyframe-builder per callout style, tuned for a punchy "犀利锐评"
+# commentary feel (fast, hard-hitting) rather than a cute UI bounce - this
+# replaced an earlier single soft bounce style that read as too simple/toy-
+# like for the tone. Each takes (pop_us, x, y) - the entry's resting x/y -
+# and returns the keyframes dict. pop_us is the pop-in window; after it the
+# callout holds at rest until the segment ends.
+def _callout_keyframes(style, pop_us, x, y):
+    if style == 'stamp':
+        # hard, fast overshoot-and-settle - like a stamp slamming down
+        q = pop_us / 4
+        return {"scale": [
+            {"at_us": 0, "value": 0.25},
+            {"at_us": round(q), "value": 1.32},
+            {"at_us": round(q * 2), "value": 0.94},
+            {"at_us": round(q * 3), "value": 1.07},
+            {"at_us": pop_us, "value": 1.0},
+        ]}
+    if style == 'swipe_in':
+        # fast horizontal whip-in, like a title card swiping into frame
+        return {
+            "scale": [{"at_us": 0, "value": 0.9}, {"at_us": pop_us, "value": 1.0}],
+            "x": [{"at_us": 0, "value": x - 0.3}, {"at_us": round(pop_us * 0.75), "value": x + 0.02},
+                  {"at_us": pop_us, "value": x}],
+        }
+    if style == 'wobble_rotate':
+        # snaps in slightly rotated then wobbles level - "knocked into place"
+        q = pop_us / 3
+        return {
+            "scale": [{"at_us": 0, "value": 0.5}, {"at_us": round(q), "value": 1.15},
+                      {"at_us": pop_us, "value": 1.0}],
+            "rotation": [{"at_us": 0, "value": -10}, {"at_us": round(q), "value": 6},
+                         {"at_us": round(q * 2), "value": -3}, {"at_us": pop_us, "value": 0}],
+        }
+    if style == 'drop_in':
+        # drops from above with a hard landing bounce
+        return {
+            "scale": [{"at_us": 0, "value": 0.85}, {"at_us": round(pop_us * 0.7), "value": 1.1},
+                      {"at_us": pop_us, "value": 1.0}],
+            "y": [{"at_us": 0, "value": y + 0.16}, {"at_us": round(pop_us * 0.7), "value": y - 0.015},
+                  {"at_us": pop_us, "value": y}],
+        }
+    raise SystemExit(f'Unknown callout style: {style!r} (known: stamp, swipe_in, wobble_rotate, drop_in)')
 
 
 def require(value, message):
@@ -179,9 +234,13 @@ def build_plan(spec):
         whisper_path = block.get('whisper_json') or (os.path.splitext(wav_path)[0] + '.whisper.json')
         block_lines = read_lines(text_path)
         raw_total_us = probe_duration_us(wav_path)
-        target_total_us = block.get('target_duration_us')
-        require(target_total_us, f'block for {wav_path} needs target_duration_us '
-                '(the actual timeline duration Jianying gave this clip after applying its speed factor)')
+        # Default: play narration at its own natural pace (speed 1.0). This
+        # engine has no "keep pitch" field for sped-up audio (documented in
+        # references/ai-narrated-image-video.md), so reproducing Jianying's
+        # own speed-compressed target_duration_us here audibly detunes the
+        # voice on rebuild. Only pass target_duration_us if you specifically
+        # want the narration sped up/slowed down and accept that risk.
+        target_total_us = block.get('target_duration_us') or raw_total_us
         ensure_whisper_json(wav_path, whisper_path, model_name=spec.get('whisper_model', 'small'))
         us, coverage = durations_from_whisper(block_lines, whisper_path, raw_total_us, target_total_us, fps)
         print(f'[align] {block["text_file"]}: {len(block_lines)} lines, coverage {coverage:.1%}', file=sys.stderr)
@@ -205,37 +264,62 @@ def build_plan(spec):
     excluded = set(i for idxs in special_line_indices.values() for i in idxs)
     remaining_idx = [i for i in range(len(all_lines)) if i not in excluded]
 
-    # 3. Distribute remaining lines proportionally across the generated images.
-    gen_pattern = spec['generated_images']
-    gen_files = sorted(glob.glob(os.path.join(materials_dir, gen_pattern['glob'])),
-                        key=numeric_sort_key if gen_pattern.get('sort') == 'numeric-suffix' else None)
-    require(gen_files, 'No generated images matched ' + gen_pattern['glob'])
-    n_gen = len(gen_files)
-    buckets = [[] for _ in range(n_gen)]
-    for pos, li in enumerate(remaining_idx):
-        b = pos * n_gen // len(remaining_idx)
-        buckets[b].append(li)
-    for b in buckets:
-        require(b, f'A generated image got zero lines - use fewer images or more narration text '
-                '({n_gen} images for {len(remaining_idx)} lines)')
+    # 3. Placement. Two modes:
+    #    - fully manual (house rule: match content, not file order): every
+    #      image is a "special_images" entry with match_line(s), and there is
+    #      no "generated_images" glob - remaining_idx must end up empty.
+    #    - auto-bucket (legacy/quick mode): leftover lines not claimed by any
+    #      special are distributed proportionally across a glob of images, in
+    #      file order. Only use this when nobody has actually looked at what
+    #      the generated images depict; prefer the manual mode otherwise.
+    gen_pattern = spec.get('generated_images')
+    if gen_pattern:
+        gen_files = sorted(glob.glob(os.path.join(materials_dir, gen_pattern['glob'])),
+                            key=numeric_sort_key if gen_pattern.get('sort') == 'numeric-suffix' else None)
+        require(gen_files, 'No generated images matched ' + gen_pattern['glob'])
+    else:
+        gen_files = []
 
-    scenes = [(gen_files[i], buckets[i], None) for i in range(n_gen)]
+    if remaining_idx and not gen_files:
+        require(False, f'{len(remaining_idx)} narration lines are not covered by any special_images '
+                'entry, and no generated_images glob was given to auto-fill the rest. Either add '
+                'match_line(s) entries for every line (preferred - match image content to what is '
+                'actually being said), or provide a generated_images glob for the leftovers.')
 
-    for s in specials:
-        idxs = special_line_indices[id(s)]
-        target_idx = idxs[0] if len(idxs) == 1 else idxs  # multi-line specials keep contiguous group
-        photo = os.path.join(materials_dir, s['image']) if not os.path.isabs(s['image']) else s['image']
-        kf = s.get('keyframes')
-        if isinstance(target_idx, list):
-            # contiguous multi-line special (e.g. an opening artifact photo spanning 2 lines)
-            insert_special(scenes, target_idx[0], photo, kf)
-            # replace the just-inserted single-line entry with the full group
-            for pos, (img, blines, k) in enumerate(scenes):
-                if img == photo and blines == [target_idx[0]]:
-                    scenes[pos] = (photo, sorted(target_idx), k)
-                    break
-        else:
-            insert_special(scenes, target_idx, photo, kf)
+    if gen_files:
+        n_gen = len(gen_files)
+        buckets = [[] for _ in range(n_gen)]
+        for pos, li in enumerate(remaining_idx):
+            b = pos * n_gen // len(remaining_idx)
+            buckets[b].append(li)
+        for b in buckets:
+            require(b, f'A generated image got zero lines - use fewer images or more narration text '
+                    '({n_gen} images for {len(remaining_idx)} lines)')
+        scenes = [(gen_files[i], buckets[i], None) for i in range(n_gen)]
+
+        for s in specials:
+            idxs = special_line_indices[id(s)]
+            target_idx = idxs[0] if len(idxs) == 1 else idxs
+            photo = os.path.join(materials_dir, s['image']) if not os.path.isabs(s['image']) else s['image']
+            kf = s.get('keyframes')
+            if isinstance(target_idx, list):
+                insert_special(scenes, target_idx[0], photo, kf)
+                for pos, (img, blines, k) in enumerate(scenes):
+                    if img == photo and blines == [target_idx[0]]:
+                        scenes[pos] = (photo, sorted(target_idx), k)
+                        break
+            else:
+                insert_special(scenes, target_idx, photo, kf)
+    else:
+        # Fully manual placement: every image is a special_images entry: no
+        # buckets to straddle, just sort by each entry's first matched line.
+        entries = []
+        for s in specials:
+            idxs = sorted(special_line_indices[id(s)])
+            photo = os.path.join(materials_dir, s['image']) if not os.path.isabs(s['image']) else s['image']
+            entries.append((idxs[0], photo, idxs, s.get('keyframes')))
+        entries.sort(key=lambda e: e[0])
+        scenes = [(photo, idxs, kf) for _, photo, idxs, kf in entries]
 
     seen = sorted(li for _, blines, _ in scenes for li in blines)
     require(seen == list(range(len(all_lines))), 'Every narration line must map to exactly one scene')
@@ -259,12 +343,33 @@ def build_plan(spec):
 
     tracks = [video_track]
 
+    title_cfg = spec.get('title_card')
+    if title_cfg:
+        tc = dict(style.get('title_card', HOUSE_STYLE['title_card']))
+        tc.update(title_cfg)  # spec-level overrides win
+        # Two segments starting at the same time can't share one track
+        # (segments on a track must be ordered/nonoverlapping) - use two
+        # separate text tracks instead.
+        tracks.append({"type": "text", "name": spec.get('title_track_name', '标题-系列'), "segments": [
+            {"text": tc['series'], "start_us": 0, "duration_us": tc['duration_us'],
+             "size": tc['series_size'], "x": 0, "y": tc['series_y'],
+             "color": tc['series_color'], "border_color": tc['series_border_color'],
+             "border_width": tc['series_border_width']},
+        ]})
+        tracks.append({"type": "text", "name": spec.get('title_track_name2', '标题'), "segments": [
+            {"text": tc['title'], "start_us": 0, "duration_us": tc['duration_us'],
+             "size": tc['title_size'], "x": 0, "y": tc['title_y'],
+             "color": tc['title_color'], "border_color": tc['title_border_color'],
+             "border_width": tc['title_border_width']},
+        ]})
+
     callout_cfg = spec.get('callouts', [])
     callout_track = None
     if callout_cfg:
         callout_track = {"type": "text", "name": spec.get('callout_track_name', '关键词'), "segments": []}
         pop = style.get('callout_pop', HOUSE_STYLE['callout_pop'])
-        for c in callout_cfg:
+        style_cycle = pop.get('style_cycle', ['bounce'])
+        for ci, c in enumerate(callout_cfg):
             keyword = c['keyword']
             occurrence = c.get('occurrence', 1)
             block = None
@@ -282,19 +387,31 @@ def build_plan(spec):
             speed = block['_raw_total_us'] / block['_target_total_us']
             spoken_start_us = block['_timeline_start_us'] + round(raw_start_s * 1_000_000 / speed)
             hold_us = c.get('duration_us', pop['default_hold_us'])
-            pop_us = min(pop['pop_duration_us'], hold_us)
+            pop_us = min(c.get('pop_duration_us', 350_000), hold_us)
+            entry_x, entry_y = c.get('x', pop['x']), c.get('y', pop['y'])
+            entry_style = c.get('style', style_cycle[ci % len(style_cycle)])
+            kf = _callout_keyframes(entry_style, pop_us, entry_x, entry_y)
+            # The engine requires any static x/y/scale/rotation field to equal
+            # that channel's first keyframe value (animation-start value, not
+            # the resting position) - see native_motion.py validate().
+            seg_x = kf['x'][0]['value'] if 'x' in kf else entry_x
+            seg_y = kf['y'][0]['value'] if 'y' in kf else entry_y
             callout_track['segments'].append({
                 "text": c.get('text', keyword),
                 "start_us": spoken_start_us, "duration_us": hold_us,
-                "size": c.get('size', pop['size']), "x": c.get('x', pop['x']), "y": c.get('y', pop['y']),
+                "size": c.get('size', pop['size']), "x": seg_x, "y": seg_y,
                 "color": c.get('color', pop['color']), "border_color": c.get('border_color', pop['border_color']),
                 "border_width": c.get('border_width', pop['border_width']),
-                "keyframes": {"scale": [
-                    {"at_us": 0, "value": pop['scale_from']},
-                    {"at_us": round(pop_us * 0.6), "value": pop['scale_overshoot']},
-                    {"at_us": pop_us, "value": pop['scale_settle']},
-                ]},
+                "keyframes": kf,
             })
+        callout_track['segments'].sort(key=lambda s: s['start_us'])
+        for i in range(1, len(callout_track['segments'])):
+            prev = callout_track['segments'][i - 1]
+            cur = callout_track['segments'][i]
+            if cur['start_us'] < prev['start_us'] + prev['duration_us']:
+                prev['duration_us'] = cur['start_us'] - prev['start_us']  # trim overlap, keep the pop intact
+                require(prev['duration_us'] > 0, 'Two callouts resolve to (almost) the same instant - '
+                        'space out the keywords or shorten default_hold_us')
 
     bgm_cfg = spec.get('bgm')
     if bgm_cfg:
