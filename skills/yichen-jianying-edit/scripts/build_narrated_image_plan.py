@@ -3,15 +3,12 @@
 
 Reusable template distilled from the 康熙红票 project: still-image slideshow
 (Ken Burns pan/zoom) synced to pre-recorded narration by real ASR alignment,
-not guessed reading speed. See references/ai-narrated-image-video.md for the
-full workflow this script is one step of.
+not guessed reading speed. House style is a restrained, "成熟历史纪录片"
+look - see HOUSE_STYLE below and references/ai-narrated-image-video.md for
+the full workflow this script is one step of.
 
 Usage:
     python3 build_narrated_image_plan.py --spec spec.json --out plan.json
-
-See references/ai-narrated-image-video.md for the spec.json schema and the
-end-to-end workflow (recording narration, extracting it, running this script,
-build/publish).
 """
 import argparse
 import glob
@@ -25,6 +22,28 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from align_audio import line_boundary_times  # noqa: E402
 
 FPS_DEFAULT = 30
+
+# House style, fixed by explicit user request - do not loosen these without
+# being asked again:
+#   - restrained "mature documentary" motion only: slow push-in, slow
+#     pull-out, slow left<->right pan, alternated - no diagonal/vertical
+#     drift, no fast/flashy movement.
+#   - every adjacent pair crossfades (no hard cuts) at a fixed duration.
+#   - no filters, visual effects, or text-effects: Ken Burns + dissolve only.
+#   - subtitles (when enabled): white, dark stroke, positioned low but not
+#     hugging the bottom edge, max ~2 lines per cue. The engine has no bold/
+#     font-weight field (checked engine/jy14_headless.py and
+#     native_motion.py) - "bold" is approximated with a heavier border_width
+#     and slightly larger size, not true font weight.
+#   - BGM (when enabled) is volume-ducked below narration automatically.
+HOUSE_STYLE = {
+    'transition_seconds': 0.25,
+    'subtitle': {
+        'color': '#FFFFFF', 'border_color': '#000000', 'border_width': 0.09,
+        'size': 8, 'y': -0.72, 'max_lines': 2,
+    },
+    'bgm_volume_ratio': 0.18,  # BGM volume = narration volume * this ratio, unless spec overrides
+}
 
 
 def require(value, message):
@@ -56,10 +75,6 @@ def ensure_whisper_json(wav_path, whisper_json_path, model_name='small', languag
         json.dump(result, f, ensure_ascii=False, indent=2)
 
 
-def frame_round(us, fps):
-    return round(round(us * fps / 1_000_000) * 1_000_000 / fps)
-
-
 def durations_from_whisper(text_lines, whisper_json_path, raw_total_us, target_total_us, fps,
                             min_coverage=0.85):
     n_lines = len(text_lines)
@@ -85,26 +100,19 @@ def durations_from_whisper(text_lines, whisper_json_path, raw_total_us, target_t
     return us, coverage
 
 
-# Ken Burns pattern library. Every pan magnitude here is paired with enough
-# scale headroom that panning never reveals a black edge (margin = (scale-1)/2
-# on the tightest side must stay comfortably above the pan magnitude - this
-# was the exact bug reported and fixed on 康熙红票: small-scale pure pans
-# showed letterboxing). Cycled by scene index; special images can override.
+# Restrained documentary Ken Burns library: slow push-in, slow pull-out, and
+# a left<->right pan, cycled in order. Magnitudes are deliberately subtle
+# ("轻微慢推近/慢拉远/左右平移") - much gentler than a highlight-reel style.
+# Pan magnitude is still kept well inside the scale headroom ((scale-1)/2) on
+# every entry so panning never reveals a black edge - this was a real bug
+# (see references/ai-narrated-image-video.md) and the margin must be kept
+# even when these values are retuned.
 KEN_BURNS = [
-    {"scale": [1.05, 1.20], "x": [0.00, -0.065], "y": [0.00, 0.00]},
-    {"scale": [1.20, 1.05], "x": [-0.065, 0.00], "y": [0.00, 0.00]},
-    {"scale": [1.25, 1.35], "x": [-0.09, 0.09], "y": [0.00, 0.00]},
-    {"scale": [1.35, 1.25], "x": [0.09, -0.09], "y": [0.00, 0.00]},
-    {"scale": [1.14, 1.26], "x": [0.00, 0.00], "y": [0.045, -0.045]},
-    {"scale": [1.26, 1.14], "x": [0.00, 0.00], "y": [-0.045, 0.045]},
-    {"scale": [1.18, 1.32], "x": [0.06, -0.06], "y": [0.03, -0.03]},
-    {"scale": [1.32, 1.18], "x": [-0.06, 0.06], "y": [-0.03, 0.03]},
+    {"scale": [1.00, 1.08], "x": [0.00, 0.00], "y": [0.00, 0.00]},   # slow push-in
+    {"scale": [1.08, 1.00], "x": [0.00, 0.00], "y": [0.00, 0.00]},   # slow pull-out
+    {"scale": [1.12, 1.18], "x": [-0.05, 0.05], "y": [0.00, 0.00]},  # slow left -> right pan
+    {"scale": [1.18, 1.12], "x": [0.05, -0.05], "y": [0.00, 0.00]},  # slow right -> left pan
 ]
-
-# Transition rhythm: only 'dissolve' is a captured/verified native resource in
-# this repo (see engine/native-resource-catalog.json). Cut variety instead
-# comes from alternating hard cuts with short/long dissolves.
-TRANSITION_CYCLE = [None, ('dissolve', 10), ('dissolve', 16)]  # None = hard cut; frames
 
 
 def numeric_sort_key(path):
@@ -128,10 +136,28 @@ def insert_special(scene_list, target_idx, photo_path, keyframes=None):
     scene_list.append((photo_path, [target_idx], keyframes))
 
 
+def wrap_two_lines(text, max_chars_per_line=16):
+    """Best-effort split of one subtitle cue into at most 2 lines. This is a
+    character-count heuristic, not real font-metric line breaking - if a
+    line is still too long to read comfortably at the chosen canvas/size,
+    shorten the source narration line instead of trusting this blindly."""
+    if len(text) <= max_chars_per_line:
+        return text
+    mid = len(text) // 2
+    # break near the middle, preferring existing whitespace
+    left_space = text.rfind(' ', 0, mid)
+    right_space = text.find(' ', mid)
+    if left_space != -1 or right_space != -1:
+        cut = left_space if left_space != -1 and (mid - left_space) <= (right_space - mid if right_space != -1 else 999) else right_space
+        return text[:cut].strip() + '\n' + text[cut:].strip()
+    return text[:mid] + '\n' + text[mid:]
+
+
 def build_plan(spec):
     materials_dir = spec['materials_dir']
     fps = spec.get('canvas', {}).get('fps', FPS_DEFAULT)
     canvas = spec.get('canvas', {'width': 1920, 'height': 1080, 'fps': fps})
+    style = spec.get('style', HOUSE_STYLE)
 
     # 1. Load narration blocks and run/reuse whisper alignment for each.
     all_lines = []
@@ -201,9 +227,11 @@ def build_plan(spec):
     seen = sorted(li for _, blines, _ in scenes for li in blines)
     require(seen == list(range(len(all_lines))), 'Every narration line must map to exactly one scene')
 
-    # 4. Assemble video + audio tracks.
+    # 4. Assemble tracks: video (+ optional subtitles), narration audio (+ optional BGM).
     video_track = {"type": "video", "name": spec.get('video_track_name', '主视频'), "segments": []}
     audio_track = {"type": "audio", "name": spec.get('audio_track_name', '旁白'), "segments": []}
+    subtitle_cfg = spec.get('subtitles')
+    text_track = {"type": "text", "name": "字幕", "segments": []} if subtitle_cfg and subtitle_cfg.get('enabled') else None
 
     cursor = 0
     for block in spec['blocks']:
@@ -213,9 +241,35 @@ def build_plan(spec):
             "speed": block['_raw_total_us'] / block['_target_total_us'], "volume": block.get('volume', 1.0),
         })
         cursor += block['_target_total_us']
+    narration_volume = spec['blocks'][0].get('volume', 1.0) if spec['blocks'] else 1.0
+
+    tracks = [video_track]
+
+    bgm_cfg = spec.get('bgm')
+    if bgm_cfg:
+        bgm_path = os.path.join(materials_dir, bgm_cfg['source']) if not os.path.isabs(bgm_cfg['source']) else bgm_cfg['source']
+        bgm_total_us = cursor  # narration total duration computed above
+        bgm_volume = bgm_cfg.get('volume', narration_volume * style.get('bgm_volume_ratio', HOUSE_STYLE['bgm_volume_ratio']))
+        bgm_source_us = probe_duration_us(bgm_path)
+        bgm_track = {"type": "audio", "name": spec.get('bgm_track_name', 'BGM'), "segments": [{
+            "source": bgm_path, "start_us": 0, "duration_us": min(bgm_total_us, bgm_source_us),
+            "source_start_us": 0, "source_duration_us": min(bgm_total_us, bgm_source_us),
+            "volume": bgm_volume,
+        }]}
+        require(bgm_source_us >= bgm_total_us,
+                f'BGM track ({bgm_source_us/1e6:.1f}s) is shorter than the narration '
+                f'({bgm_total_us/1e6:.1f}s); trimmed to BGM length - provide a longer track or loop it yourself')
+        tracks.append(bgm_track)
+
+    tracks.append(audio_track)
+    if text_track is not None:
+        tracks.append(text_track)
 
     cursor = 0
     n_scenes = len(scenes)
+    trans_us = round(style.get('transition_seconds', HOUSE_STYLE['transition_seconds']) * fps)
+    trans_us = round((trans_us if trans_us % 2 == 0 else trans_us + 1) * 1_000_000 / fps)  # even-frame snap
+    sub_style = style.get('subtitle', HOUSE_STYLE['subtitle'])
     for si, (img_path, blines, kf_override) in enumerate(scenes):
         seg_dur = sum(per_line_us[li] for li in blines)
         pattern = kf_override or KEN_BURNS[si % len(KEN_BURNS)]
@@ -228,18 +282,32 @@ def build_plan(spec):
             },
         }
         if si < n_scenes - 1:
-            style = TRANSITION_CYCLE[si % len(TRANSITION_CYCLE)]
-            if style is not None:
-                name, n_frames = style
-                seg["transition_out"] = {"name": name, "duration_us": round(n_frames * 1_000_000 / fps)}
+            # house style: every adjacent pair dissolves, no hard cuts, no
+            # mixed transition types (only 'dissolve' is a captured/verified
+            # native resource in this repo - see native-resource-catalog.json)
+            seg["transition_out"] = {"name": "dissolve", "duration_us": trans_us}
         video_track['segments'].append(seg)
+
+        if text_track is not None:
+            sub_cursor = cursor
+            for li in blines:
+                d = per_line_us[li]
+                text_track['segments'].append({
+                    "text": wrap_two_lines(all_lines[li], sub_style.get('max_chars_per_line', 16)),
+                    "start_us": sub_cursor, "duration_us": d,
+                    "size": sub_style['size'], "x": 0, "y": sub_style['y'],
+                    "color": sub_style['color'], "border_color": sub_style['border_color'],
+                    "border_width": sub_style['border_width'],
+                })
+                sub_cursor += d
+
         cursor += seg_dur
 
     plan = {
         "schema": "jy14-headless-plan/v1",
         "name": spec['name'],
         "canvas": canvas,
-        "tracks": [video_track, audio_track],
+        "tracks": tracks,
     }
     return plan
 
